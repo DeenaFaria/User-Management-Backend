@@ -5,6 +5,8 @@ const cors = require('cors');
 const mysql = require('mysql2');
 const WebSocket = require('ws');
 
+const port = process.env.PORT || 5000;
+
 // Initialize express app
 const app = express();
 app.use(cors());
