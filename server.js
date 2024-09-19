@@ -17,8 +17,8 @@ const db = mysql.createConnection({
   host: process.env.DB_HOST, // set this to Railway's MySQL host
   user: process.env.DB_USER, // set this to Railway's MySQL user
   password: process.env.DB_PASS, // set this to Railway's MySQL password
-  database: process.env.DB_NAME // set this to Railway's MySQL database name
-  
+  database: process.env.DB_NAME, // set this to Railway's MySQL database name
+  port: process.env.MYSQL_PORT
 });
 
 db.connect((err) => {
