@@ -113,7 +113,7 @@ app.get('/api/users', verifyToken, (req, res) => {
   });
 });
 
-const wss = new WebSocket.Server({ port: 8080 });
+const wss = new WebSocket.Server({ port: 8081 });
 
 wss.on('connection', (ws) => {
   console.log('User connected to WebSocket');
