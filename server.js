@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const mysql = require('mysql2');
 const WebSocket = require('ws');
-
+require('dotenv').config();
 
 
 // Initialize express app
@@ -18,6 +18,7 @@ const db = mysql.createConnection({
   user: process.env.DB_USER, // set this to Railway's MySQL user
   password: process.env.DB_PASS, // set this to Railway's MySQL password
   database: process.env.DB_NAME // set this to Railway's MySQL database name
+  
 });
 
 db.connect((err) => {
