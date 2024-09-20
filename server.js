@@ -13,23 +13,14 @@ app.use(cors());
 app.use(express.json());
 
 // Connect to MySQL
-const db = mysql.createConnection({
-  host: process.env.DB_HOST, // set this to Railway's MySQL host
-  user: process.env.DB_USER, // set this to Railway's MySQL user
-  password: process.env.DB_PASS, // set this to Railway's MySQL password
-  database: process.env.DB_NAME, // set this to Railway's MySQL database name
-  port: process.env.MYSQL_PORT
-});
+const db = mysql.createConnection(process.env.MYSQL_URL);
+
 
 db.connect((err) => {
   if (err) throw err;
   console.log('Connected to MySQL');
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
 
 // JWT secret key
 const secretKey = 'secret';
@@ -114,7 +105,7 @@ app.get('/api/users', verifyToken, (req, res) => {
   });
 });
 
-const wss = new WebSocket.Server({ port: 8081 });
+const wss = new WebSocket.Server({ port: 8080 });
 
 wss.on('connection', (ws) => {
   console.log('User connected to WebSocket');
@@ -170,6 +161,8 @@ app.post('/api/users/delete', verifyToken, (req, res) => {
 });
 
 // Start the server
-app.listen(5000, () => {
-  console.log('Server running on http://localhost:5000');
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
 });
+
