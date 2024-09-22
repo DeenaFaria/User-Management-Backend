@@ -2,7 +2,6 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const mysql = require('mysql2');
 const WebSocket = require('ws');
 require('dotenv').config();
 
@@ -12,16 +11,49 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Connect to MySQL
-const db = mysql.createConnection(process.env.MYSQL_URL);
+const { Pool } = require('pg');
 
-
-db.connect((err) => {
-  if (err) throw err;
-  console.log('Connected to MySQL');
+// Set up PostgreSQL connection pool
+const pool = new Pool({
+  connectionString: process.env.DB_URL,  // Connection URL stored in .env file
+  port: 5432,                             // PostgreSQL port
+  ssl: {
+    rejectUnauthorized: false,  // This disables the strict SSL certificate validation
+  }
 });
 
+// Test the connection
+pool.connect((err) => {
+  if (err) {
+    return console.error('Error acquiring client', err.stack);
+  }
+  console.log('Connected to PostgreSQL database');
+});
 
+// Create the `users` table if it doesn't exist
+const createUsersTable = async () => {
+  const createTableQuery = `
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      password VARCHAR(255) NOT NULL,
+      registration_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      last_login_time TIMESTAMP,
+      status VARCHAR(10) DEFAULT 'active'
+    );
+  `;
+
+  try {
+    await pool.query(createTableQuery);
+    console.log('Users table created or already exists.');
+  } catch (err) {
+    console.error('Error creating users table:', err);
+  }
+};
+
+// Call the function to create the table
+createUsersTable();
 // JWT secret key
 const secretKey = 'secret';
 
@@ -30,54 +62,55 @@ const verifyToken = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(403).json({ message: 'No token provided' });
 
-  jwt.verify(token, secretKey, (err, decoded) => {
+  jwt.verify(token, secretKey, async (err, decoded) => {
     if (err) return res.status(401).json({ message: 'Unauthorized' });
 
-    db.query('SELECT status FROM users WHERE id = ?', [decoded.id], (err, results) => {
-      if (err) return res.status(500).json(err);
-      if (!results.length || results[0].status === 'blocked') {
+    try {
+      const result = await pool.query('SELECT status FROM users WHERE id = $1', [decoded.id]);
+      if (!result.rows.length || result.rows[0].status === 'blocked') {
         return res.status(403).json({ message: 'Access denied' });
       }
       req.userId = decoded.id;
       next();
-    });
+    } catch (error) {
+      return res.status(500).json(error);
+    }
   });
 };
 
-//registration route
+// Registration route
 app.post('/api/register', async (req, res) => {
   const { name, email, password } = req.body;
   const hashedPassword = await bcrypt.hash(password, 10);
 
-  db.query(
-    'INSERT INTO users (name, email, password, registration_time) VALUES (?, ?, ?, NOW())',
-    [name, email, hashedPassword],
-    (err, result) => {
-      if (err) return res.status(500).json(err);
-      res.status(201).json({ message: 'User registered successfully' });
-    }
-  );
+  try {
+    const query = 'INSERT INTO users (name, email, password, registration_time) VALUES ($1, $2, $3, NOW())';
+    await pool.query(query, [name, email, hashedPassword]);
+    res.status(201).json({ message: 'User registered successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 });
 
-
 // Login route
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ message: 'Please fill all fields' });
   }
 
-  db.query('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
-    if (err) return res.status(500).json({ message: 'Internal server error' });
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
 
-    if (!results.length) {
+    if (result.rows.length === 0) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    const user = results[0];
+    const user = result.rows[0];
     const isPasswordValid = await bcrypt.compare(password, user.password);
-    
+
     if (!isPasswordValid) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
@@ -87,24 +120,27 @@ app.post('/api/login', (req, res) => {
     }
 
     // Update last_login_time
-    db.query('UPDATE users SET last_login_time = NOW() WHERE id = ?', [user.id], (err) => {
-      if (err) console.error('Failed to update last login time:', err);
-    });
+    await pool.query('UPDATE users SET last_login_time = NOW() WHERE id = $1', [user.id]);
 
     const token = jwt.sign({ id: user.id }, secretKey, { expiresIn: '1h' });
     res.json({ token });
-  });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 });
-
 
 // Get users route
-app.get('/api/users', verifyToken, (req, res) => {
-  db.query('SELECT id, name, email, registration_time, last_login_time, status FROM users', (err, results) => {
-    if (err) return res.status(500).json(err);
-    res.json(results);
-  });
+app.get('/api/users', verifyToken, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name, email, registration_time, last_login_time, status FROM users');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json(err);
+  }
 });
 
+// WebSocket server setup
 const wss = new WebSocket.Server({ port: 8080 });
 
 wss.on('connection', (ws) => {
@@ -119,8 +155,8 @@ wss.on('connection', (ws) => {
   });
 });
 
+// Function to notify clients when a user is blocked
 function notifyUserBlocked(userId) {
-  // Broadcast to all connected users
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify({ type: 'block', userId }));
@@ -128,41 +164,48 @@ function notifyUserBlocked(userId) {
   });
 }
 
-
-// When you block a user
-app.post('/api/users/block', verifyToken, (req, res) => {
+// Block users route
+app.post('/api/users/block', verifyToken, async (req, res) => {
   const { userIds } = req.body;
-  db.query('UPDATE users SET status = "blocked" WHERE id IN (?)', [userIds], (err, result) => {
-    if (err) return res.status(500).json(err);
+  try {
+    const query = 'UPDATE users SET status = $1 WHERE id = ANY($2)';
+    await pool.query(query, ['blocked', userIds]);
     notifyUserBlocked(userIds);
     res.json({ message: 'Users blocked successfully' });
-  });
+  } catch (err) {
+    res.status(500).json(err);
+  }
 });
 
 // Unblock users route
-app.post('/api/users/unblock', verifyToken, (req, res) => {
+app.post('/api/users/unblock', verifyToken, async (req, res) => {
   const { userIds } = req.body;
-  db.query('UPDATE users SET status = "active" WHERE id IN (?)', [userIds], (err, result) => {
-    if (err) return res.status(500).json(err);
+  try {
+    const query = 'UPDATE users SET status = $1 WHERE id = ANY($2)';
+    await pool.query(query, ['active', userIds]);
     res.json({ message: 'Users unblocked successfully' });
-  });
+  } catch (err) {
+    res.status(500).json(err);
+  }
 });
 
 // Delete users route
-app.post('/api/users/delete', verifyToken, (req, res) => {
+app.post('/api/users/delete', verifyToken, async (req, res) => {
   const { userIds } = req.body;
   if (!userIds || !userIds.length) {
     return res.status(400).json({ message: 'No users selected for deletion' });
   }
-  db.query('DELETE FROM users WHERE id IN (?)', [userIds], (err, result) => {
-    if (err) return res.status(500).json(err);
+  try {
+    const query = 'DELETE FROM users WHERE id = ANY($1)';
+    await pool.query(query, [userIds]);
     res.status(200).json({ message: 'Users deleted successfully' });
-  });
+  } catch (err) {
+    res.status(500).json(err);
+  }
 });
 
 // Start the server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
 });
-
